@@ -48,6 +48,14 @@ namespace CasualtiesJiggle
             JiggleBody.ForBody(__instance)?.OnEat(weightGain);
         }
 
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(Body), "Update")]
+        [HarmonyPriority(Priority.First)]
+        private static void Body_Update_RemoveLimbOffsets(Body __instance)
+        {
+            JiggleBody.ForBody(__instance)?.RemoveLimbOffsets();
+        }
+
         private sealed class StuckScaleState
         {
             public bool Applied;

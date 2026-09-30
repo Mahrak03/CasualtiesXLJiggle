@@ -587,6 +587,11 @@ namespace CasualtiesJiggle
             }
         }
 
+        public void RemoveLimbOffsets()
+        {
+            UndoAll();
+        }
+
         public void OnFootStep()
         {
             if (
