@@ -58,7 +58,7 @@ namespace CasualtiesJiggle
                                 edge + depth,
                                 _groundMask
                             );
-                            if (!IsWallSurface(hit))
+                            if (!IsWallSurface(hit) || hit.fraction <= 0f)
                                 continue;
                             float press = Mathf.Clamp01((edge - hit.distance) / depth);
                             if (press > best)

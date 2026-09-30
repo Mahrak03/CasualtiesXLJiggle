@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using CasualtiesExtra;
 using HarmonyLib;
 using UnityEngine;
@@ -47,6 +48,51 @@ namespace CasualtiesJiggle
             JiggleBody.ForBody(__instance)?.OnEat(weightGain);
         }
 
+        private sealed class StuckScaleState
+        {
+            public bool Applied;
+            public bool Touched1;
+            public float Raw1;
+            public float Raw2;
+        }
+
+        private static readonly ConditionalWeakTable<Body, StuckScaleState> StuckScales =
+            new ConditionalWeakTable<Body, StuckScaleState>();
+
+        private static void SetScaleX(Transform t, float x)
+        {
+            Vector3 s = t.localScale;
+            t.localScale = new Vector3(x, s.y, s.z);
+        }
+
+        // XL smooths limb scale from the value it reads at the start of Body.Update.
+        // Give it back the raw scale, not our neutralized one, or it feeds on itself and blows up at high fps.
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(Body), "Update")]
+        [HarmonyPriority(Priority.First)]
+        private static void Body_Update_RestoreScale(Body __instance)
+        {
+            try
+            {
+                if (
+                    !StuckScales.TryGetValue(__instance, out StuckScaleState state)
+                    || !state.Applied
+                )
+                    return;
+                state.Applied = false;
+                if (
+                    __instance.limbs == null
+                    || __instance.limbs.Length <= 2
+                    || !CasualtiesExtraApi.GetStuck(__instance)
+                )
+                    return;
+                if (state.Touched1)
+                    SetScaleX(__instance.limbs[1].transform, state.Raw1);
+                SetScaleX(__instance.limbs[2].transform, state.Raw2);
+            }
+            catch { }
+        }
+
         [HarmonyPostfix]
         [HarmonyPatch(typeof(Body), "Update")]
         [HarmonyAfter("thesofteeveeboy.mods.CasualtiesExtra")]
@@ -61,20 +107,18 @@ namespace CasualtiesJiggle
                 int stage = CasualtiesExtraApi.GetWeightStage(__instance);
                 if (stage < 2 || !CasualtiesExtraApi.GetStuck(__instance))
                     return;
-                Transform t1 = __instance.limbs[1].transform;
-                Transform t2 = __instance.limbs[2].transform;
-                float f1 = stage == 2 ? 0.9f : 1f;
-                if (f1 != 1f)
-                    t1.localScale = new Vector3(
-                        t1.localScale.x / f1,
-                        t1.localScale.y,
-                        t1.localScale.z
-                    );
-                t2.localScale = new Vector3(
-                    t2.localScale.x / 0.75f,
-                    t2.localScale.y,
-                    t2.localScale.z
-                );
+                Limb l1 = __instance.limbs[1];
+                Limb l2 = __instance.limbs[2];
+                Transform t1 = l1.transform;
+                Transform t2 = l2.transform;
+                StuckScaleState state = StuckScales.GetOrCreateValue(__instance);
+                state.Touched1 = stage == 2;
+                state.Raw1 = t1.localScale.x;
+                state.Raw2 = t2.localScale.x;
+                if (state.Touched1)
+                    SetScaleX(t1, 1f + l1.weightVisualScaleMult * 0.01f);
+                SetScaleX(t2, 1f + l2.weightVisualScaleMult * 0.01f);
+                state.Applied = true;
             }
             catch
             {

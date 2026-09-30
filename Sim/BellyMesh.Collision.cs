@@ -151,7 +151,7 @@ namespace CasualtiesJiggle
             if (delta.magnitude < 0.05f)
                 return false;
             RaycastHit2D hit = Physics2D.Linecast(origin, target, _groundMaskCached);
-            if (hit.collider == null || hit.collider.isTrigger)
+            if (hit.collider == null || hit.collider.isTrigger || hit.fraction <= 0f)
                 return false;
             if (hit.collider.GetComponentInParent<Body>() != null)
                 return false; // never the character's own colliders

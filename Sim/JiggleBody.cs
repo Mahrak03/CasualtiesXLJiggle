@@ -30,6 +30,7 @@ namespace CasualtiesJiggle
 
         private float _wobble; // weight-coupled global amplitude (0 at stage 0)
         private bool _wasGrounded = true;
+        private float _stuckHold;
         private float _airVelY;
         private float _fallF; // fall state 0..1 (airborne + descending), fast attack / slow release
         private float _breathT;
@@ -155,12 +156,23 @@ namespace CasualtiesJiggle
 
             float dt = Time.fixedDeltaTime;
 
+            // XL flips stuck off for a moment while wiggling, so hold it for 0.3 s.
+            if (CasualtiesExtraApi.GetStuck(_body))
+                _stuckHold = 0.3f;
+            else
+                _stuckHold = Mathf.Max(0f, _stuckHold - dt);
+            bool stuckBody = _stuckHold > 0f;
+
             // Stage 0 nothing else to simulate.
             if (_wobble <= 0.001f)
             {
                 _sPos *= 0.85f;
                 _sVel *= 0.85f;
                 _press *= 0.85f;
+                if (_bellyMesh != null && _bellyMesh.Valid)
+                    _bellyMesh.SoftReset();
+                if (_chestMesh != null && _chestMesh.Valid)
+                    _chestMesh.SoftReset();
                 _fallF *= 0.85f;
                 return;
             }
@@ -356,6 +368,18 @@ namespace CasualtiesJiggle
                 restSoft = restSoft.normalized * restCap;
             if (rest.sqrMagnitude > restCap * restCap)
                 rest = rest.normalized * restCap;
+            if (!float.IsFinite(rest.x) || !float.IsFinite(rest.y))
+                rest = Vector2.zero;
+            if (!float.IsFinite(restSoft.x) || !float.IsFinite(restSoft.y))
+                restSoft = Vector2.zero;
+            // While stuck the belly mesh is hidden, so calm the spring or the other limbs drift away from the belly.
+            if (stuckBody)
+            {
+                rest = Vector2.zero;
+                restSoft = Vector2.zero;
+                _sPos *= 0.7f;
+                _sVel *= 0.5f;
+            }
 
             float rumbleAmpNow = 0f;
             float rumbleSin = 0f;
@@ -399,6 +423,16 @@ namespace CasualtiesJiggle
             _sVel += (rest - _sPos) * k * dt;
             _sVel *= damp;
             _sPos += _sVel * dt;
+            if (
+                !float.IsFinite(_sPos.x)
+                || !float.IsFinite(_sPos.y)
+                || !float.IsFinite(_sVel.x)
+                || !float.IsFinite(_sVel.y)
+            )
+            {
+                _sPos = Vector2.zero;
+                _sVel = Vector2.zero;
+            }
             if (_sPos.sqrMagnitude > maxSq * maxSq)
             {
                 _sPos = _sPos.normalized * maxSq;
@@ -420,13 +454,13 @@ namespace CasualtiesJiggle
                 SoftImpulseAll(imp);
             }
 
-            bool stuckNow =
-                JiggleConfig.SoftBody.Value
-                && (_bellyMesh != null || _chestMesh != null)
-                && CasualtiesExtraApi.GetStuck(_body);
+            bool stuckNow = (_bellyMesh != null || _chestMesh != null) && stuckBody;
+            if (_bellyMesh != null && _bellyMesh.Valid)
+                _bellyMesh.SetStuck(stuckNow);
+            if (_chestMesh != null && _chestMesh.Valid)
+                _chestMesh.SetStuck(stuckNow);
             if (JiggleConfig.SoftBody.Value && _bellyMesh != null && _bellyMesh.Valid)
             {
-                _bellyMesh.SetStuck(stuckNow);
                 _bellyMesh.SoftStep(
                     restSoft,
                     dt,
@@ -441,7 +475,6 @@ namespace CasualtiesJiggle
             {
                 Limb cl = _body.limbs[SoftProfile.Chest.LimbIndex];
                 Transform ct = cl != null ? cl.transform : transform;
-                _chestMesh.SetStuck(stuckNow);
 
                 Vector3 dWorld = bt.TransformVector(new Vector3(restSoft.x, restSoft.y, 0f));
                 Vector3 dLocal = ct.InverseTransformVector(dWorld);

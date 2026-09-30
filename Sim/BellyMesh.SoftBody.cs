@@ -192,7 +192,7 @@ namespace CasualtiesJiggle
                     _pt[i] = _base2[i] + d / m * maxDisp;
                     _ptLast[i] += (_pt[i] - _ptLast[i]) * 0.5f;
                 }
-                if (float.IsNaN(_pt[i].x) || float.IsNaN(_pt[i].y))
+                if (!float.IsFinite(_pt[i].x) || !float.IsFinite(_pt[i].y))
                 {
                     _pt[i] = _ptLast[i] = _base2[i]; // Thx wg mod for teaching me how to reset funky points!!!
                     SoftNaNResets++;

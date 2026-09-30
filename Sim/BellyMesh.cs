@@ -77,14 +77,19 @@ namespace CasualtiesJiggle
                 return;
             _mr.enabled = !stuck;
             _sr.enabled = stuck;
-            if (stuck && _softBuilt)
+            if (stuck)
+                SoftReset();
+        }
+
+        public void SoftReset()
+        {
+            if (!_softBuilt)
+                return;
+            for (int i = 0; i < _pt.Length; i++)
             {
-                for (int i = 0; i < _pt.Length; i++)
-                {
-                    _pt[i] = _ptLast[i] = _base2[i];
-                    if (_ovf != null && i < _ovf.Length)
-                        _ovf[i] = Vector2.zero;
-                }
+                _pt[i] = _ptLast[i] = _base2[i];
+                if (_ovf != null && i < _ovf.Length)
+                    _ovf[i] = Vector2.zero;
             }
         }
 
@@ -104,7 +109,19 @@ namespace CasualtiesJiggle
             if (sr == null || sr.sprite == null)
                 return null;
 
+            if (existing != null)
+            {
+                existing._sr = sr;
+                existing.Profile = profile;
+                existing.CollideEnabled = profile.Collide;
+                if (existing.Rebuild())
+                    return existing;
+                Destroy(existing.gameObject);
+                return null;
+            }
+
             GameObject go = new GameObject("JiggleBellyMesh");
+            go.layer = limb.gameObject.layer;
             go.transform.SetParent(limb.transform, false);
             BellyMesh bm = go.AddComponent<BellyMesh>();
             bm._sr = sr;
@@ -530,6 +547,9 @@ namespace CasualtiesJiggle
             if (!Valid)
                 return;
             Valid = false;
+            // Hide the mesh too, or the mesh and the sprite both draw.
+            if (_mr != null)
+                _mr.enabled = false;
             if (_sr != null)
                 _sr.enabled = true;
         }
