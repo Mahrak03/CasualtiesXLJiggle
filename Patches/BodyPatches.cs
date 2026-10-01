@@ -56,6 +56,13 @@ namespace CasualtiesJiggle
             JiggleBody.ForBody(__instance)?.RemoveLimbOffsets();
         }
 
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(Body), "Ragdoll")]
+        private static void Body_Ragdoll_RemoveLimbOffsets(Body __instance)
+        {
+            JiggleBody.ForBody(__instance)?.RemoveLimbOffsets();
+        }
+
         private sealed class StuckScaleState
         {
             public bool Applied;

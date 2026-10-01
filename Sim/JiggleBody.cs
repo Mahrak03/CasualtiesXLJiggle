@@ -558,6 +558,7 @@ namespace CasualtiesJiggle
                     || l.dismembered
                     || !l.gameObject.activeInHierarchy
                     || _share[i] <= 0.0001f
+                    || (l.rb != null && l.rb.simulated)
                 )
                 {
                     UndoLimb(i);
