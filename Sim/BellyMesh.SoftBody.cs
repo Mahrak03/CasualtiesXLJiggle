@@ -131,7 +131,7 @@ namespace CasualtiesJiggle
             int groundMask
         )
         {
-            if (!_softBuilt || bt == null || _stuck)
+            if (!_softBuilt || bt == null || _stuck || dt <= 0f || !float.IsFinite(dt))
                 return;
             float kSpring = Mathf.Clamp01(Profile.Stiffness) * 0.5f;
             float kHome = Mathf.Clamp01(Profile.HomePull);

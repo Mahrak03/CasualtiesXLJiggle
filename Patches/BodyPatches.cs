@@ -53,22 +53,48 @@ namespace CasualtiesJiggle
         [HarmonyPriority(Priority.First)]
         private static void Body_Update_RemoveLimbOffsets(Body __instance)
         {
-            JiggleBody.ForBody(__instance)?.RemoveLimbOffsets();
+            __instance.GetComponent<JiggleBody>()?.RemoveLimbOffsets();
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(Body), "FixedUpdate")]
+        [HarmonyPriority(Priority.First)]
+        private static void Body_FixedUpdate_RestoreTransforms(Body __instance)
+        {
+            __instance.GetComponent<JiggleBody>()?.RemoveLimbOffsets();
+            RestoreStuckScale(__instance);
         }
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(Body), "Ragdoll")]
+        [HarmonyPriority(Priority.First)]
         private static void Body_Ragdoll_RemoveLimbOffsets(Body __instance)
         {
-            JiggleBody.ForBody(__instance)?.RemoveLimbOffsets();
+            __instance.GetComponent<JiggleBody>()?.RemoveLimbOffsets();
+            RestoreStuckScale(__instance);
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(typeof(Body), nameof(Body.SetLimbCollisionType))]
+        private static void Body_SetLimbCollisionType(
+            Body __instance,
+            ref CollisionDetectionMode2D col
+        )
+        {
+            // Vanilla downgrades unconscious limbs to discrete collision, allowing tile tunneling.
+            if (!__instance.standing && JiggleBody.ForBody(__instance) != null)
+                col = CollisionDetectionMode2D.Continuous;
         }
 
         private sealed class StuckScaleState
         {
             public bool Applied;
-            public bool Touched1;
+            public Transform Torso1;
+            public Transform Torso2;
             public float Raw1;
             public float Raw2;
+            public float Written1;
+            public float Written2;
         }
 
         private static readonly ConditionalWeakTable<Body, StuckScaleState> StuckScales =
@@ -87,23 +113,20 @@ namespace CasualtiesJiggle
         [HarmonyPriority(Priority.First)]
         private static void Body_Update_RestoreScale(Body __instance)
         {
+            RestoreStuckScale(__instance);
+        }
+
+        private static void RestoreStuckScale(Body body)
+        {
             try
             {
-                if (
-                    !StuckScales.TryGetValue(__instance, out StuckScaleState state)
-                    || !state.Applied
-                )
+                if (!StuckScales.TryGetValue(body, out StuckScaleState state) || !state.Applied)
                     return;
                 state.Applied = false;
-                if (
-                    __instance.limbs == null
-                    || __instance.limbs.Length <= 2
-                    || !CasualtiesExtraApi.GetStuck(__instance)
-                )
-                    return;
-                if (state.Touched1)
-                    SetScaleX(__instance.limbs[1].transform, state.Raw1);
-                SetScaleX(__instance.limbs[2].transform, state.Raw2);
+                if (state.Torso1 != null && state.Torso1.localScale.x == state.Written1)
+                    SetScaleX(state.Torso1, state.Raw1);
+                if (state.Torso2 != null && state.Torso2.localScale.x == state.Written2)
+                    SetScaleX(state.Torso2, state.Raw2);
             }
             catch { }
         }
@@ -113,7 +136,11 @@ namespace CasualtiesJiggle
         [HarmonyAfter("thesofteeveeboy.mods.CasualtiesExtra")]
         private static void Body_Update(Body __instance)
         {
-            if (!JiggleConfig.NeutralizeStuckScale.Value)
+            if (
+                !JiggleConfig.Enabled.Value
+                || !JiggleConfig.NeutralizeStuckScale.Value
+                || !__instance.standing
+            )
                 return;
             try
             {
@@ -124,15 +151,25 @@ namespace CasualtiesJiggle
                     return;
                 Limb l1 = __instance.limbs[1];
                 Limb l2 = __instance.limbs[2];
+                if (
+                    l1 == null
+                    || l2 == null
+                    || (l2.rb != null && l2.rb.simulated)
+                    || (stage == 2 && l1.rb != null && l1.rb.simulated)
+                )
+                    return;
                 Transform t1 = l1.transform;
                 Transform t2 = l2.transform;
                 StuckScaleState state = StuckScales.GetOrCreateValue(__instance);
-                state.Touched1 = stage == 2;
+                state.Torso1 = stage == 2 ? t1 : null;
+                state.Torso2 = t2;
                 state.Raw1 = t1.localScale.x;
                 state.Raw2 = t2.localScale.x;
-                if (state.Touched1)
-                    SetScaleX(t1, 1f + l1.weightVisualScaleMult * 0.01f);
-                SetScaleX(t2, 1f + l2.weightVisualScaleMult * 0.01f);
+                state.Written1 = 1f + l1.weightVisualScaleMult * 0.01f;
+                state.Written2 = 1f + l2.weightVisualScaleMult * 0.01f;
+                if (state.Torso1 != null)
+                    SetScaleX(t1, state.Written1);
+                SetScaleX(t2, state.Written2);
                 state.Applied = true;
             }
             catch

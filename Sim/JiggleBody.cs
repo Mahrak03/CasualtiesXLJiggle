@@ -21,6 +21,9 @@ namespace CasualtiesJiggle
         private Vector2 _smoothAccel; // smoothed WORLD acceleration of the body
         private Vector2 _lastVel; // last sampled velocity of the accel source
         private bool _haveVel;
+        private Vector2 _meshDrive;
+        private float _pendingMeshTime;
+        private float _meshStepDt;
 
         // how much of the shared spring each limb rides (index like Body.limbs)
         private float[] _share;
@@ -66,6 +69,7 @@ namespace CasualtiesJiggle
         private void RebuildState()
         {
             UndoAll();
+            _pendingMeshTime = 0f;
             _bellyMesh = null;
             _meshAttempted = false;
             _meshRetryAfter = -1f;
@@ -127,8 +131,18 @@ namespace CasualtiesJiggle
                 return;
             if (_share == null || _share.Length != _body.limbs.Length)
                 RebuildState();
-            if (_share == null || !JiggleConfig.Enabled.Value)
+            if (_share == null || !JiggleConfig.Enabled.Value || Time.timeScale <= 0f)
+            {
+                _pendingMeshTime = 0f;
                 return;
+            }
+
+            float dt = Time.fixedDeltaTime;
+            if (dt <= 0f || !float.IsFinite(dt))
+            {
+                _pendingMeshTime = 0f;
+                return;
+            }
 
             float amount;
             if (JiggleConfig.ScaleWithWeight.Value)
@@ -154,8 +168,6 @@ namespace CasualtiesJiggle
             amount *= JiggleConfig.Intensity.Value;
             _wobble = Mathf.Max(amount, 0f);
 
-            float dt = Time.fixedDeltaTime;
-
             // XL flips stuck off for a moment while wiggling, so hold it for 0.3 s.
             if (CasualtiesExtraApi.GetStuck(_body))
                 _stuckHold = 0.3f;
@@ -166,6 +178,7 @@ namespace CasualtiesJiggle
             // Stage 0 nothing else to simulate.
             if (_wobble <= 0.001f)
             {
+                _pendingMeshTime = 0f;
                 _sPos *= 0.85f;
                 _sVel *= 0.85f;
                 _press *= 0.85f;
@@ -288,13 +301,9 @@ namespace CasualtiesJiggle
             }
 
             // --- fall state: airborne + descending fast enough to billow the belly up ---
-            float fallTarget =
-                !_body.grounded && v.y < -2f ? Mathf.Clamp01((-v.y - 2f) / 10f) : 0f;
+            float fallTarget = !_body.grounded && v.y < -2f ? Mathf.Clamp01((-v.y - 2f) / 10f) : 0f;
             float fallRate = fallTarget > _fallF ? 8f : 5f;
             _fallF += (fallTarget - _fallF) * (1f - Mathf.Exp(-fallRate * dt));
-
-            // --- wall press (WgPhysics RayIntersectSolid, adapted to sprites) ---
-            ProbeWall(bt, dt);
 
             Vector2 gravL = (Vector2)
                 bt.InverseTransformVector(
@@ -304,8 +313,7 @@ namespace CasualtiesJiggle
                 bt.InverseTransformVector(new Vector3(_smoothAccel.x, _smoothAccel.y, 0f));
             float sagGain = JiggleConfig.GravitySag.Value * 0.045f * Mathf.Clamp(_wobble, 0f, 2.5f);
             float sagMul = 1f - _fallF * JiggleConfig.FallSagFade.Value;
-            Vector2 rest =
-                (gravL - accL) * (sagGain * JiggleConfig.InertiaGain.Value * sagMul);
+            Vector2 rest = (gravL - accL) * (sagGain * JiggleConfig.InertiaGain.Value * sagMul);
 
             float maxSq = JiggleConfig.MaxSquash.Value;
             float driveCap = maxSq * 0.5f;
@@ -315,11 +323,9 @@ namespace CasualtiesJiggle
             Vector2 lift = Vector2.zero;
             if (_fallF > 0.001f)
             {
-                Vector2 upL =
-                    gravL.sqrMagnitude > 1e-10f ? -gravL.normalized : Vector2.up;
+                Vector2 upL = gravL.sqrMagnitude > 1e-10f ? -gravL.normalized : Vector2.up;
                 float wob4 = Mathf.Clamp(_wobble, 0f, 4f) / 4f;
-                lift = upL
-                    * (JiggleConfig.FallLift.Value * maxSq * wob4 * _fallF);
+                lift = upL * (JiggleConfig.FallLift.Value * maxSq * wob4 * _fallF);
                 rest += lift;
             }
 
@@ -459,36 +465,10 @@ namespace CasualtiesJiggle
                 _bellyMesh.SetStuck(stuckNow);
             if (_chestMesh != null && _chestMesh.Valid)
                 _chestMesh.SetStuck(stuckNow);
-            if (JiggleConfig.SoftBody.Value && _bellyMesh != null && _bellyMesh.Valid)
-            {
-                _bellyMesh.SoftStep(
-                    restSoft,
-                    dt,
-                    _press,
-                    _pressSide,
-                    _body.grounded,
-                    bt,
-                    _groundMask
-                );
-            }
-            if (JiggleConfig.SoftBody.Value && _chestMesh != null && _chestMesh.Valid)
-            {
-                Limb cl = _body.limbs[SoftProfile.Chest.LimbIndex];
-                Transform ct = cl != null ? cl.transform : transform;
-
-                Vector3 dWorld = bt.TransformVector(new Vector3(restSoft.x, restSoft.y, 0f));
-                Vector3 dLocal = ct.InverseTransformVector(dWorld);
-                Vector2 chestDrive = new Vector2(dLocal.x, dLocal.y) * SoftProfile.Chest.DriveMul;
-                _chestMesh.SoftStep(
-                    chestDrive,
-                    dt,
-                    _press,
-                    _pressSide,
-                    _body.grounded,
-                    ct,
-                    _groundMask
-                );
-            }
+            // Coalesce catch-up ticks: cosmetic grid solving must not scale with fast-forward.
+            _meshDrive = restSoft;
+            _meshStepDt = dt;
+            _pendingMeshTime = Mathf.Min(_pendingMeshTime + dt, 0.1f);
 
             if (JiggleConfig.DebugEnabled.Value && Time.time - _lastDbg >= 1f)
             {
@@ -543,10 +523,64 @@ namespace CasualtiesJiggle
                 belly != null && !belly.dismembered && belly.gameObject.activeInHierarchy;
             Transform bt = bellyAlive ? belly.transform : transform;
 
+            float meshTime = _pendingMeshTime;
+            _pendingMeshTime = 0f;
+            if (meshTime > 0f && Time.timeScale > 0f)
+            {
+                ProbeWall(bt, meshTime);
+                if (
+                    JiggleConfig.SoftBody.Value
+                    && bellyAlive
+                    && _bellyMesh != null
+                    && _bellyMesh.Valid
+                )
+                {
+                    _bellyMesh.SoftStep(
+                        _meshDrive,
+                        _meshStepDt,
+                        _press,
+                        _pressSide,
+                        _body.grounded,
+                        bt,
+                        _groundMask
+                    );
+                }
+                if (JiggleConfig.SoftBody.Value && _chestMesh != null && _chestMesh.Valid)
+                {
+                    Limb cl = _body.limbs[SoftProfile.Chest.LimbIndex];
+                    if (cl != null && !cl.dismembered && cl.gameObject.activeInHierarchy)
+                    {
+                        Transform ct = cl.transform;
+                        Vector3 dWorld = bt.TransformVector(
+                            new Vector3(_meshDrive.x, _meshDrive.y, 0f)
+                        );
+                        Vector3 dLocal = ct.InverseTransformVector(dWorld);
+                        Vector2 chestDrive =
+                            new Vector2(dLocal.x, dLocal.y) * SoftProfile.Chest.DriveMul;
+                        _chestMesh.SoftStep(
+                            chestDrive,
+                            _meshStepDt,
+                            _press,
+                            _pressSide,
+                            _body.grounded,
+                            ct,
+                            _groundMask
+                        );
+                    }
+                }
+            }
+
             if (bellyAlive && _bellyMesh != null && _bellyMesh.Valid)
                 _bellyMesh.UpdateMesh(_sPos);
             if (_chestMesh != null && _chestMesh.Valid)
                 _chestMesh.UpdateMesh(Vector2.zero);
+
+            // Sleeping/ragdolled limbs provide floor support; only their child meshes may jiggle.
+            if (!_body.standing)
+            {
+                UndoAll();
+                return;
+            }
 
             Vector3 wdisp = bt.TransformVector(new Vector3(_sPos.x, _sPos.y, 0f));
             float maxOff = JiggleConfig.MaxOffset.Value;
@@ -702,6 +736,7 @@ namespace CasualtiesJiggle
 
         private void RestoreMesh()
         {
+            _pendingMeshTime = 0f;
             if (_bellyMesh != null)
             {
                 _bellyMesh.Restore();
